@@ -1,0 +1,84 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() { return request.auth != null; }
+    function isAdmin() {
+      return isSignedIn() && 
+             request.auth.token.email == 'shell.tunji@gmail.com' && 
+             request.auth.token.email_verified == true;
+    }
+    function isValidId(id) { 
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); 
+    }
+
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+
+    // --- CATEGORY ---
+    function isValidCategory(data) {
+      return data.name is string && data.name.size() <= 64 &&
+             (!('bgColor' in data) || (data.bgColor is string && data.bgColor.matches('^#[0-9a-fA-F]{6}$'))) &&
+             (!('textColor' in data) || (data.textColor is string && data.textColor.matches('^#[0-9a-fA-F]{6}$')));
+    }
+
+    match /categories/{categoryId} {
+      allow read: if true;
+      allow create: if isAdmin() && isValidId(categoryId) &&
+                      isValidCategory(incoming()) &&
+                      incoming().keys().hasAll(['name', 'bgColor', 'textColor']) &&
+                      incoming().keys().size() == 3;
+      allow update: if isAdmin() && isValidId(categoryId) &&
+                      isValidCategory(incoming()) && (
+                        incoming().diff(existing()).affectedKeys().hasOnly(['bgColor']) ||
+                        incoming().diff(existing()).affectedKeys().hasOnly(['textColor']) ||
+                        incoming().diff(existing()).affectedKeys().hasOnly(['name']) ||
+                        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'bgColor', 'textColor'])
+                      );
+      allow delete: if isAdmin() && isValidId(categoryId);
+    }
+
+    // --- POST ---
+    function isValidPost(data) {
+      return data.title is string && data.title.size() <= 200 &&
+             data.content is string && data.content.size() <= 100000 &&
+             data.categoryIds is list && data.categoryIds.size() <= 20 &&
+             data.date is timestamp;
+    }
+
+    match /posts/{postId} {
+      allow read: if true;
+      allow create: if isAdmin() && isValidId(postId) &&
+                      isValidPost(incoming()) &&
+                      incoming().keys().hasAll(['title', 'content', 'categoryIds', 'mediaUrls', 'date', 'createdAt', 'updatedAt']) &&
+                      incoming().keys().size() == 7;
+      allow update: if isAdmin() && isValidId(postId) &&
+                      isValidPost(incoming()) && 
+                      incoming().createdAt == existing().createdAt && (
+                        incoming().diff(existing()).affectedKeys().hasOnly(['title', 'categoryIds', 'content', 'mediaUrls', 'date', 'updatedAt'])
+                      );
+      allow delete: if isAdmin() && isValidId(postId);
+    }
+
+    // --- NEWSLETTER ---
+    match /newsletter/{subscriberId} {
+      allow create: if isValidId(subscriberId) &&
+                      incoming().email is string && 
+                      incoming().email.size() <= 256 &&
+                      incoming().topicIds is list &&
+                      incoming().topicIds.size() <= 50;
+      allow read, update, delete: if isAdmin() && isValidId(subscriberId);
+    }
+
+    // --- SETTINGS ---
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidId(settingId);
+    }
+  }
+}
