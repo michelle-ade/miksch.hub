@@ -7,12 +7,15 @@ import CategoryManager from './CategoryManager';
 import PostList from './PostList';
 import { ArrowLeft, Plus, Tags, FileText, LogOut } from 'lucide-react';
 import { toast } from 'react-hot-toast';
+import { supabase } from '../../supabaseClient';
 
 interface AdminPanelProps {
   onBack: () => void;
   posts: Post[];
   categories: Category[];
 }
+
+const adminEmail = import.meta.env.VITE_ADMIN_EMAIL;
 
 export default function AdminPanel({ onBack, posts, categories }: AdminPanelProps) {
   const [user, setUser] = useState(auth.currentUser);
@@ -21,27 +24,28 @@ export default function AdminPanel({ onBack, posts, categories }: AdminPanelProp
 
   const handleLogin = async () => {
     try {
-      const provider = new GoogleAuthProvider();
-      const result = await signInWithPopup(auth, provider);
-      if (result.user.email !== 'shell.tunji@gmail.com') {
-        toast.error('Unauthorized access.');
-        await signOut(auth);
-      } else {
-        setUser(result.user);
-        toast.success('Admin logged in.');
-      }
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          // This ensures the window doesn't just close and stay closed
+          redirectTo: window.location.origin + window.location.pathname,
+        },
+      });
+      if (error) throw error;
     } catch (error) {
       toast.error('Login failed.');
+      console.error(error);
     }
   };
 
   const handleLogout = async () => {
-    await signOut(auth);
+    await supabase.auth.signOut();
     setUser(null);
     onBack();
   };
 
-  if (!user || user.email !== 'shell.tunji@gmail.com') {
+  // This part protects the UI
+  if (!user || user.email !== adminEmail) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-white text-black">
         <h1 className="text-4xl font-bold mb-8">Admin Access</h1>
