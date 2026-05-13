@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { Category, DEFAULT_THEME, getThemeFromCategory, ThemeConfig } from './types';
-import { db } from './lib/firebase';
-import { collection, onSnapshot, doc } from 'firebase/firestore';
+import { supabase } from './supabaseClient';
 import { cn } from './lib/utils';
 
 interface ThemeContextType {
@@ -19,42 +18,86 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [siteTheme, setSiteTheme] = useState<ThemeConfig | null>(null);
 
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'categories'), (snapshot) => {
-      const c = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Category));
-      setCategories(c);
-    });
-    return unsub;
+    const fetchCategories = async () => {
+      const { data, error } = await supabase
+        .from('categories')
+        .select('id, name, bg_color, text_color')
+        .order('name');
+
+      if (error) {
+        console.error('Error loading categories:', error);
+        return;
+      }
+
+      const mapped = (data ?? []).map(cat => ({
+        id: cat.id,
+        name: cat.name,
+        bgColor: cat.bg_color,
+        textColor: cat.text_color,
+      }));
+
+      setCategories(mapped);
+    };
+
+    fetchCategories();
+
+    const categoriesChannel = supabase
+      .channel('categories-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, () => fetchCategories())
+      .subscribe();
+
+    return () => {
+      categoriesChannel.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
-    const unsub = onSnapshot(doc(db, 'settings', 'site_theme'), (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data();
+    const fetchSiteTheme = async () => {
+      const { data, error } = await supabase
+        .from('settings')
+        .select('bg_color, text_color')
+        .eq('id', 'site_theme')
+        .single();
+
+      if (error) {
+        if (error.message !== 'Row not found') {
+          console.error('Error loading site theme:', error);
+        }
+        return;
+      }
+
+      if (data) {
         setSiteTheme({
-          bg: data.bgColor,
-          text: data.textColor,
-          accent: data.textColor,
-          border: data.textColor
+          bg: data.bg_color,
+          text: data.text_color,
+          accent: data.text_color,
+          border: data.text_color,
         });
       }
-    });
-    return unsub;
+    };
+
+    fetchSiteTheme();
+
+    const settingsChannel = supabase
+      .channel('settings-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'settings' }, () => fetchSiteTheme())
+      .subscribe();
+
+    return () => {
+      settingsChannel.unsubscribe();
+    };
   }, []);
 
-  const currentCategory = categories.find(c => c.name === categoryName);
+  const currentCategory = categories.find((c) => c.name === categoryName);
   const theme = getThemeFromCategory(currentCategory, siteTheme || undefined);
 
   useEffect(() => {
-    // Apply background color to body for smooth transitions
     document.body.style.backgroundColor = theme.bg;
   }, [theme]);
 
   return (
     <ThemeContext.Provider value={{ categoryName, setCategoryName, theme, categories }}>
-      <div 
-        className="min-h-screen transition-colors duration-500" 
-        style={{ backgroundColor: theme.bg, color: theme.text }}
-      >
+      <div className="min-h-screen transition-colors duration-500" style={{ backgroundColor: theme.bg, color: theme.text }}>
         {children}
       </div>
     </ThemeContext.Provider>

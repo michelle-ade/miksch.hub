@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { db, handleFirestoreError, OperationType } from '../../lib/firebase';
-import { collection, addDoc, deleteDoc, doc, onSnapshot, updateDoc, setDoc } from 'firebase/firestore';
+import { supabase } from '../../supabaseClient';
 import { Category } from '../../types';
 import { Trash2, Plus, Settings } from 'lucide-react';
 import { toast } from 'react-hot-toast';
@@ -13,65 +12,115 @@ export default function CategoryManager() {
   const [siteTheme, setSiteTheme] = useState<{ bgColor: string; textColor: string } | null>(null);
 
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'categories'), (snapshot) => {
-      setCategories(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Category)));
-    });
-    return unsub;
+    const fetchCategories = async () => {
+      const { data, error } = await supabase
+        .from('categories')
+        .select('id, name, bg_color as bgColor, text_color as textColor')
+        .order('name');
+
+      if (error) {
+        console.error('Error loading categories:', error);
+        return;
+      }
+
+      setCategories(data ?? []);
+    };
+
+    fetchCategories();
+
+    const categoriesChannel = supabase
+      .channel('categories-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, () => fetchCategories())
+      .subscribe();
+
+    return () => {
+      categoriesChannel.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
-    const unsub = onSnapshot(doc(db, 'settings', 'site_theme'), (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data();
-        setSiteTheme({ bgColor: data.bgColor, textColor: data.textColor });
-      } else {
-        setSiteTheme({ bgColor: '#1e293b', textColor: '#e2e8f0' });
+    const fetchSiteTheme = async () => {
+      const { data, error } = await supabase
+        .from('settings')
+        .select('bg_color as bgColor, text_color as textColor')
+        .eq('id', 'site_theme')
+        .single();
+
+      if (error) {
+        if (error.message !== 'Row not found') {
+          console.error('Error loading site theme:', error);
+        }
+        return;
       }
-    });
-    return unsub;
+
+      if (data) {
+        setSiteTheme({ bgColor: data.bgColor, textColor: data.textColor });
+      }
+    };
+
+    fetchSiteTheme();
+
+    const settingsChannel = supabase
+      .channel('settings-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'settings' }, () => fetchSiteTheme())
+      .subscribe();
+
+    return () => {
+      settingsChannel.unsubscribe();
+    };
   }, []);
 
   const handleUpdateSiteTheme = async (field: 'bgColor' | 'textColor', value: string) => {
-    try {
-      await setDoc(doc(db, 'settings', 'site_theme'), { [field]: value }, { merge: true });
-    } catch (e) {
-      handleFirestoreError(e, OperationType.UPDATE, 'settings/site_theme');
+    const payload = field === 'bgColor' ? { id: 'site_theme', bg_color: value } : { id: 'site_theme', text_color: value };
+
+    const { error } = await supabase.from('settings').upsert(payload, { onConflict: 'id' });
+    if (error) {
+      toast.error('Failed to update site theme.');
+      console.error('Supabase settings error:', error);
     }
   };
 
   const handleAddCategory = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCatName) return;
-    try {
-      await addDoc(collection(db, 'categories'), { 
-        name: newCatName,
-        bgColor: newBgColor,
-        textColor: newTextColor
-      });
-      setNewCatName('');
-      toast.success('Category added.');
-    } catch (e) {
+
+    const { error } = await supabase.from('categories').insert({
+      name: newCatName,
+      bg_color: newBgColor,
+      text_color: newTextColor,
+    });
+
+    if (error) {
       toast.error('Failed to add category.');
+      console.error('Supabase add category error:', error);
+      return;
     }
+
+    setNewCatName('');
+    toast.success('Category added.');
   };
 
   const handleUpdateColor = async (id: string, field: 'bgColor' | 'textColor', value: string) => {
-    const path = `categories/${id}`;
-    try {
-      await updateDoc(doc(db, 'categories', id), { [field]: value });
-    } catch (e) {
-      handleFirestoreError(e, OperationType.UPDATE, path);
+    const update = field === 'bgColor' ? { bg_color: value } : { text_color: value };
+    const { error } = await supabase.from('categories').update(update).eq('id', id);
+
+    if (error) {
+      toast.error('Failed to update category color.');
+      console.error('Supabase category update error:', error);
     }
   };
 
   const handleDeleteCategory = async (id: string) => {
     if (!confirm('Are you sure? This will remove this category from the site navigation and all posts.')) return;
-    try {
-      await deleteDoc(doc(db, 'categories', id));
-      toast.success('Category deleted.');
-    } catch (e) {
+
+    const { error } = await supabase.from('categories').delete().eq('id', id);
+    if (error) {
       toast.error('Failed to delete category.');
+      console.error('Supabase delete category error:', error);
+      return;
     }
+
+    toast.success('Category deleted.');
   };
 
   return (

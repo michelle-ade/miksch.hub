@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { supabase } from '../supabaseClient';
 import { toast } from 'react-hot-toast';
 
 import { Category } from '../types';
@@ -23,27 +22,28 @@ export default function SidebarRight({ categories }: SidebarRightProps) {
     }
 
     setLoading(true);
-    try {
-      await addDoc(collection(db, 'newsletter'), {
-        email,
-        topicIds: selectedTopics,
-        subscribedAt: serverTimestamp()
-      });
+
+    const { error } = await supabase.from('newsletter').insert({
+      email,
+      topic_ids: selectedTopics,
+      subscribed_at: new Date().toISOString(),
+    });
+
+    if (error) {
+      toast.error('Subscription failed.');
+      console.error('Supabase newsletter error:', error);
+    } else {
       toast.success('Subscribed successfully!');
       setEmail('');
       setSelectedTopics([]);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'newsletter');
-    } finally {
-      setLoading(false);
     }
+
+    setLoading(false);
   };
 
   const toggleTopic = (topic: string) => {
-    setSelectedTopics(prev => 
-      prev.includes(topic) 
-        ? prev.filter(t => t !== topic) 
-        : [...prev, topic]
+    setSelectedTopics((prev) =>
+      prev.includes(topic) ? prev.filter((t) => t !== topic) : [...prev, topic]
     );
   };
 

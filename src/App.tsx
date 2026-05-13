@@ -8,9 +8,8 @@ import SidebarRight from './components/SidebarRight';
 import Feed from './components/Feed';
 import AdminPanel from './components/Admin/AdminPanel';
 import { Toaster } from 'react-hot-toast';
-import { db, auth } from './lib/firebase';
-import { onAuthStateChanged, User } from 'firebase/auth';
-import { collection, query, onSnapshot, orderBy } from 'firebase/firestore';
+import { supabase } from './supabaseClient';
+import type { User } from '@supabase/supabase-js';
 
 function AppContent() {
   const { categoryName, categories } = useAppTheme();
@@ -21,30 +20,80 @@ function AppContent() {
   const [showContactLinks, setShowContactLinks] = useState(false);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => setUser(u));
-    return unsub;
+    let mounted = true;
+
+    const loadUser = async () => {
+      const { data, error } = await supabase.auth.getUser();
+      if (mounted && !error) setUser(data.user);
+    };
+
+    loadUser();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
+  const fetchPosts = async () => {
+    const { data, error } = await supabase
+      .from('posts')
+      .select(
+        'id, title, content, category_ids, media_urls, date, created_at, updated_at'
+      )
+      .order('date', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching posts:', error);
+      return;
+    }
+
+    const mapped = (data ?? []).map(post => ({
+      id: post.id,
+      title: post.title,
+      content: post.content,
+      categoryIds: post.category_ids,
+      mediaUrls: post.media_urls,
+      date: post.date,
+      createdAt: post.created_at,
+      updatedAt: post.updated_at,
+    }));
+
+    setPosts(mapped);
+  };
+
   useEffect(() => {
-    const q = query(collection(db, 'posts'), orderBy('date', 'desc'));
-    const unsub = onSnapshot(q, (snapshot) => {
-      const p = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Post));
-      setPosts(p);
-    });
-    return unsub;
+    fetchPosts();
+
+    const postsChannel = supabase
+      .channel('posts-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'posts' }, () => {
+        fetchPosts();
+      })
+      .subscribe();
+
+    return () => {
+      postsChannel.unsubscribe();
+    };
   }, []);
 
   const filteredPosts = posts
-    .filter(p => {
-        if (!p.date) return false;
-        if (categoryName === 'Everything') return true;
-        const currentCat = categories.find(c => c.name === categoryName);
-        if (!currentCat) return false;
-        return p.categoryIds.includes(currentCat.id);
+    .filter((p) => {
+      if (!p.date) return false;
+      if (categoryName === 'Everything') return true;
+      const currentCat = categories.find((c) => c.name === categoryName);
+      if (!currentCat) return false;
+      return p.categoryIds.includes(currentCat.id);
     })
     .sort((a, b) => {
-      const timeA = a.date?.toMillis() || 0;
-      const timeB = b.date?.toMillis() || 0;
+      const timeA = new Date(a.date).getTime();
+      const timeB = new Date(b.date).getTime();
       return sortOrder === 'desc' ? timeB - timeA : timeA - timeB;
     });
 
@@ -56,54 +105,51 @@ function AppContent() {
     <div className="max-w-6xl mx-auto px-4 py-8">
       <Header />
       <Navigation categories={categories} />
-      
+
       <div className="mt-8">
-         <h2 className="text-4xl font-bold mb-8">Currently Viewing: {categoryName}</h2>
+        <h2 className="text-4xl font-bold mb-8">Currently Viewing: {categoryName}</h2>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[200px_1fr_250px] gap-8">
-        <SidebarLeft 
-          sortOrder={sortOrder} 
-          setSortOrder={setSortOrder}
-        />
+        <SidebarLeft sortOrder={sortOrder} setSortOrder={setSortOrder} />
         <Feed posts={filteredPosts} categories={categories} />
         <SidebarRight categories={categories} />
       </div>
 
       <footer className="mt-20 py-20 border-t border-current flex flex-col items-center gap-12 text-center">
         <div className="flex flex-col items-center gap-6">
-            {!showContactLinks ? (
-                <button 
-                onClick={() => setShowContactLinks(true)}
-                className="px-8 py-3 border-2 border-current font-bold hover:bg-white hover:text-black transition-all"
-                id="contact-me-btn"
-                >
-                Contact Me
-                </button>
-            ) : (
-                <div className="flex flex-col sm:flex-row gap-6 animate-in slide-in-from-bottom-2 duration-300">
-                    <a 
-                        href="mailto:contact@miksch.com" 
-                        className="text-2xl font-bold hover:underline underline-offset-8"
-                        id="contact-email-link"
-                    >
-                        Email: contact@miksch.com
-                    </a>
-                    <span className="hidden sm:inline text-current/30">|</span>
-                    <a 
-                        href="https://linkedin.com/in/miksch" 
-                        target="_blank" 
-                        rel="noreferrer"
-                        className="text-2xl font-bold hover:underline underline-offset-8"
-                        id="contact-linkedin-link"
-                    >
-                        LinkedIn
-                    </a>
-                </div>
-            )}
+          {!showContactLinks ? (
+            <button
+              onClick={() => setShowContactLinks(true)}
+              className="px-8 py-3 border-2 border-current font-bold hover:bg-white hover:text-black transition-all"
+              id="contact-me-btn"
+            >
+              Contact Me
+            </button>
+          ) : (
+            <div className="flex flex-col sm:flex-row gap-6 animate-in slide-in-from-bottom-2 duration-300">
+              <a
+                href="mailto:contact@miksch.com"
+                className="text-2xl font-bold hover:underline underline-offset-8"
+                id="contact-email-link"
+              >
+                Email: contact@miksch.com
+              </a>
+              <span className="hidden sm:inline text-current/30">|</span>
+              <a
+                href="https://linkedin.com/in/miksch"
+                target="_blank"
+                rel="noreferrer"
+                className="text-2xl font-bold hover:underline underline-offset-8"
+                id="contact-linkedin-link"
+              >
+                LinkedIn
+              </a>
+            </div>
+          )}
         </div>
 
-        <button 
+        <button
           onClick={() => setView('admin')}
           className="text-sm font-bold uppercase tracking-widest text-current/40 hover:text-current transition-colors"
           id="footer-admin-login-btn"
@@ -111,7 +157,7 @@ function AppContent() {
           {user ? 'Admin Dashboard' : 'Settings / Login'}
         </button>
       </footer>
-      
+
       <Toaster position="bottom-right" />
     </div>
   );

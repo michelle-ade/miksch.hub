@@ -11,9 +11,9 @@ export interface Post {
   content: string;
   categoryIds: string[];
   mediaUrls: string[];
-  date: any; // Firestore Timestamp
-  createdAt: any;
-  updatedAt: any;
+  date: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface ThemeConfig {

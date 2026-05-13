@@ -21,7 +21,7 @@ export default function PostCard({ post, categories }: PostCardProps) {
       <header className="mb-6">
         <div className="flex justify-between items-start mb-2">
             <span className="text-xs font-mono font-bold uppercase tracking-tighter opacity-60">
-                {formatDate(post.date.toDate())}
+                {formatDate(post.date)}
             </span>
         </div>
         <h2 className="text-5xl font-bold leading-tight" id={`post-title-${post.id}`}>

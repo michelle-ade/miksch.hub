@@ -4,9 +4,7 @@ import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
 import { Post, Category } from '../../types';
-import { db, storage, handleFirestoreError, OperationType } from '../../lib/firebase';
-import { collection, addDoc, updateDoc, doc, serverTimestamp, Timestamp } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { supabase } from '../../supabaseClient';
 import { useDropzone } from 'react-dropzone';
 import { toast } from 'react-hot-toast';
 import { Bold, Italic, List, Heading1, Heading2, Image as ImageIcon, X, Trash2 } from 'lucide-react';
@@ -20,7 +18,9 @@ interface PostEditorProps {
 export default function PostEditor({ post, categories, onSuccess }: PostEditorProps) {
   const [title, setTitle] = useState(post?.title || '');
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>(post?.categoryIds || []);
-  const [date, setDate] = useState(post?.date ? post.date.toDate().toISOString().split('T')[0] : new Date().toISOString().split('T')[0]);
+  const [date, setDate] = useState(
+    post?.date ? new Date(post.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]
+  );
   const [mediaUrls, setMediaUrls] = useState<string[]>(post?.mediaUrls || []);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -39,61 +39,74 @@ export default function PostEditor({ post, categories, onSuccess }: PostEditorPr
   const onDrop = async (acceptedFiles: File[]) => {
     setUploading(true);
     const urls: string[] = [];
+
     try {
       for (const file of acceptedFiles) {
-        const storageRef = ref(storage, `media/${Date.now()}_${file.name}`);
-        await uploadBytes(storageRef, file);
-        const url = await getDownloadURL(storageRef);
-        urls.push(url);
+        const filePath = `media/${Date.now()}_${file.name}`;
+        const { error: uploadError } = await supabase.storage.from('media').upload(filePath, file);
+        if (uploadError) throw uploadError;
+
+        const { data: publicUrlData } = await supabase.storage
+          .from('media')
+          .getPublicUrl(filePath);
+
+        if (!publicUrlData.publicUrl) throw new Error('Failed to get media URL');
+
+        urls.push(publicUrlData.publicUrl);
       }
-      setMediaUrls(prev => [...prev, ...urls]);
+      setMediaUrls((prev) => [...prev, ...urls]);
       toast.success('Media uploaded.');
     } catch (e) {
       toast.error('Upload failed.');
+      console.error('Supabase storage upload error:', e);
     } finally {
       setUploading(false);
     }
   };
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({ 
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: { 'image/*': [] }
+    accept: { 'image/*': [] },
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editor) return;
     if (!title || !editor.getHTML()) {
-        toast.error('Title and content are required');
-        return;
+      toast.error('Title and content are required');
+      return;
     }
     if (selectedCategoryIds.length === 0) {
-        toast.error('Please select at least one category');
-        return;
+      toast.error('Please select at least one category');
+      return;
     }
 
     setIsSubmitting(true);
+
     const payload = {
       title,
-      categoryIds: selectedCategoryIds,
+      category_ids: selectedCategoryIds,
       content: editor.getHTML(),
-      mediaUrls,
-      date: Timestamp.fromDate(new Date(date)),
-      updatedAt: serverTimestamp(),
-      ...(post ? {} : { createdAt: serverTimestamp() })
+      media_urls: mediaUrls,
+      date: new Date(date).toISOString(),
+      updated_at: new Date().toISOString(),
+      ...(post ? {} : { created_at: new Date().toISOString() }),
     };
 
     try {
       if (post) {
-        await updateDoc(doc(db, 'posts', post.id), payload);
+        const { error } = await supabase.from('posts').update(payload).eq('id', post.id);
+        if (error) throw error;
         toast.success('Post updated.');
       } else {
-        await addDoc(collection(db, 'posts'), payload);
+        const { error } = await supabase.from('posts').insert(payload);
+        if (error) throw error;
         toast.success('Post created.');
       }
       onSuccess();
     } catch (error) {
-      handleFirestoreError(error, post ? OperationType.UPDATE : OperationType.CREATE, post ? `posts/${post.id}` : 'posts');
+      toast.error('Failed to save post.');
+      console.error('Supabase posts error:', error);
     } finally {
       setIsSubmitting(false);
     }
@@ -118,27 +131,27 @@ export default function PostEditor({ post, categories, onSuccess }: PostEditorPr
           </div>
 
           <div>
-              <label className="block text-sm font-bold uppercase mb-2">Date</label>
-              <input
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="w-full p-3 border-2 border-black font-bold focus:outline-none"
-                id="post-date-input"
-              />
+            <label className="block text-sm font-bold uppercase mb-2">Date</label>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="w-full p-3 border-2 border-black font-bold focus:outline-none"
+              id="post-date-input"
+            />
           </div>
 
           <div>
             <label className="block text-sm font-bold uppercase mb-2">Categories</label>
             <div className="grid grid-cols-2 gap-2 border-2 border-black p-4 max-h-[250px] overflow-y-auto" id="category-checkbox-list">
-              {categories.map(cat => (
+              {categories.map((cat) => (
                 <label key={cat.id} className="flex items-center gap-2 cursor-pointer group">
                   <input
                     type="checkbox"
                     checked={selectedCategoryIds.includes(cat.id)}
                     onChange={(e) => {
-                      if (e.target.checked) setSelectedCategoryIds(prev => [...prev, cat.id]);
-                      else setSelectedCategoryIds(prev => prev.filter(id => id !== cat.id));
+                      if (e.target.checked) setSelectedCategoryIds((prev) => [...prev, cat.id]);
+                      else setSelectedCategoryIds((prev) => prev.filter((id) => id !== cat.id));
                     }}
                     className="w-5 h-5 border-2 border-black appearance-none checked:bg-black transition-all cursor-pointer"
                     id={`category-checkbox-${cat.id}`}
@@ -154,28 +167,30 @@ export default function PostEditor({ post, categories, onSuccess }: PostEditorPr
         <div className="space-y-6">
           <div>
             <label className="block text-sm font-bold uppercase mb-2">Media Upload</label>
-            <div 
-                {...getRootProps()} 
-                className={`border-4 border-dashed border-black p-8 text-center cursor-pointer transition-colors ${isDragActive ? 'bg-black/5' : ''}`}
-                id="media-uploader"
+            <div
+              {...getRootProps()}
+              className={`border-4 border-dashed border-black p-8 text-center cursor-pointer transition-colors ${
+                isDragActive ? 'bg-black/5' : ''
+              }`}
+              id="media-uploader"
             >
               <input {...getInputProps()} />
               <div className="flex flex-col items-center gap-2">
                 <ImageIcon size={40} className="opacity-40" />
                 <p className="font-bold uppercase tracking-widest text-sm">
-                    {uploading ? 'Uploading...' : 'Drag & drop images, or click to select'}
+                  {uploading ? 'Uploading...' : 'Drag & drop images, or click to select'}
                 </p>
               </div>
             </div>
-            
+
             {mediaUrls.length > 0 && (
               <div className="mt-4 grid grid-cols-3 gap-2" id="uploaded-media-list">
                 {mediaUrls.map((url, i) => (
                   <div key={i} className="relative group aspect-square border-2 border-black overflow-hidden">
                     <img src={url} alt="Uploaded" className="w-full h-full object-cover" />
-                    <button 
+                    <button
                       type="button"
-                      onClick={() => setMediaUrls(prev => prev.filter((_, idx) => idx !== i))}
+                      onClick={() => setMediaUrls((prev) => prev.filter((_, idx) => idx !== i))}
                       className="absolute top-1 right-1 bg-white border border-black p-1 opacity-0 group-hover:opacity-100 transition-opacity"
                     >
                       <X size={14} />
@@ -202,8 +217,8 @@ export default function PostEditor({ post, categories, onSuccess }: PostEditorPr
       </div>
 
       <div className="flex justify-end gap-4">
-        <button 
-          type="submit" 
+        <button
+          type="submit"
           disabled={isSubmitting}
           className="px-10 py-4 bg-black text-white font-bold uppercase tracking-[0.2em] hover:bg-black/90 disabled:opacity-50 transition-all text-xl"
           id="save-post-btn"

@@ -2,8 +2,7 @@ import React from 'react';
 import { Post, Category } from '../../types';
 import { formatDate } from '../../lib/utils';
 import { Edit2, Trash2 } from 'lucide-react';
-import { db } from '../../lib/firebase';
-import { deleteDoc, doc } from 'firebase/firestore';
+import { supabase } from '../../supabaseClient';
 import { toast } from 'react-hot-toast';
 
 interface PostListProps {
@@ -15,17 +14,20 @@ interface PostListProps {
 export default function PostList({ posts, categories, onEdit }: PostListProps) {
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this post?')) return;
-    try {
-      await deleteDoc(doc(db, 'posts', id));
-      toast.success('Post deleted.');
-    } catch (e) {
+
+    const { error } = await supabase.from('posts').delete().eq('id', id);
+    if (error) {
       toast.error('Failed to delete post.');
+      console.error('Supabase delete post error:', error);
+      return;
     }
+
+    toast.success('Post deleted.');
   };
 
   const getPostCategoryNames = (categoryIds: string[]) => {
     return categoryIds
-      .map(id => categories.find(c => c.id === id)?.name)
+      .map((id) => categories.find((c) => c.id === id)?.name)
       .filter(Boolean)
       .join(', ');
   };
@@ -39,7 +41,7 @@ export default function PostList({ posts, categories, onEdit }: PostListProps) {
           <div key={post.id} className="p-6 flex flex-col md:flex-row justify-between md:items-center gap-4 bg-white hover:bg-black/5 transition-colors group">
             <div className="space-y-1">
               <span className="text-xs font-mono font-bold opacity-60 uppercase">
-                {formatDate(post.date.toDate())} — {getPostCategoryNames(post.categoryIds || [])}
+                {formatDate(post.date)} — {getPostCategoryNames(post.categoryIds || [])}
               </span>
               <h3 className="text-2xl font-bold uppercase tracking-tight">{post.title}</h3>
             </div>

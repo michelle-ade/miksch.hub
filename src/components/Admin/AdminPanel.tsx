@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react'; // 1. Added useEffect here
+import React, { useState, useEffect } from 'react';
+import type { User } from '@supabase/supabase-js';
 import { Post, Category } from '../../types';
 import PostEditor from './PostEditor';
 import CategoryManager from './CategoryManager';
@@ -16,25 +17,54 @@ interface AdminPanelProps {
 const adminEmail = import.meta.env.VITE_ADMIN_EMAIL;
 
 export default function AdminPanel({ onBack, posts, categories }: AdminPanelProps) {
-  // 2. Changed initialization to null (we will fill it via useEffect)
-  const [user, setUser] = useState<any>(null); 
+  const [user, setUser] = useState<User | null>(null);
   const [activeTab, setActiveTab] = useState<'posts' | 'new-post' | 'categories'>('posts');
   const [editingPost, setEditingPost] = useState<Post | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  // 3. THIS IS THE MISSING PIECE
   useEffect(() => {
-    // Check current session on mount
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    let mounted = true;
+
+    const loadUser = async () => {
+      const { data, error } = await supabase.auth.getUser();
+      if (!mounted) return;
+      if (error) {
+        console.error('Supabase auth getUser error:', error);
+      } else {
+        setUser(data.user);
+      }
+      setLoading(false);
+    };
+
+    loadUser();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
     });
 
-    // Listen for changes (like successful redirect login)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-    });
-
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    if (!adminEmail) {
+      toast.error('Admin email is not configured.');
+      supabase.auth.signOut();
+      setUser(null);
+      return;
+    }
+
+    if (user.email !== adminEmail) {
+      toast.error('Unauthorized access.');
+      supabase.auth.signOut();
+      setUser(null);
+    }
+  }, [user]);
 
   const handleLogin = async () => {
     try {
@@ -53,19 +83,17 @@ export default function AdminPanel({ onBack, posts, categories }: AdminPanelProp
   };
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      toast.error('Logout failed.');
+      console.error('Supabase logout error:', error);
+      return;
+    }
     setUser(null);
     onBack();
   };
 
-  // 4. Added a "loading" check so it doesn't flicker the login screen 
-  // while checking the session
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    supabase.auth.getSession().then(() => setLoading(false));
-  }, []);
-
-  if (loading) return null; 
+  if (loading) return null;
 
   if (!user || user.email !== adminEmail) {
     return (
