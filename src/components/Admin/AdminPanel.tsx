@@ -1,6 +1,4 @@
-import React, { useState } from 'react';
-import { auth } from '../../lib/firebase';
-import { signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
+import React, { useState, useEffect } from 'react'; // 1. Added useEffect here
 import { Post, Category } from '../../types';
 import PostEditor from './PostEditor';
 import CategoryManager from './CategoryManager';
@@ -18,16 +16,32 @@ interface AdminPanelProps {
 const adminEmail = import.meta.env.VITE_ADMIN_EMAIL;
 
 export default function AdminPanel({ onBack, posts, categories }: AdminPanelProps) {
-  const [user, setUser] = useState(auth.currentUser);
+  // 2. Changed initialization to null (we will fill it via useEffect)
+  const [user, setUser] = useState<any>(null); 
   const [activeTab, setActiveTab] = useState<'posts' | 'new-post' | 'categories'>('posts');
   const [editingPost, setEditingPost] = useState<Post | null>(null);
+
+  // 3. THIS IS THE MISSING PIECE
+  useEffect(() => {
+    // Check current session on mount
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+    });
+
+    // Listen for changes (like successful redirect login)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
 
   const handleLogin = async () => {
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          // This ensures the window doesn't just close and stay closed
+          // This must match exactly what you have in Supabase Site URL
           redirectTo: window.location.origin + window.location.pathname,
         },
       });
@@ -44,7 +58,15 @@ export default function AdminPanel({ onBack, posts, categories }: AdminPanelProp
     onBack();
   };
 
-  // This part protects the UI
+  // 4. Added a "loading" check so it doesn't flicker the login screen 
+  // while checking the session
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    supabase.auth.getSession().then(() => setLoading(false));
+  }, []);
+
+  if (loading) return null; 
+
   if (!user || user.email !== adminEmail) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-white text-black">
@@ -64,11 +86,12 @@ export default function AdminPanel({ onBack, posts, categories }: AdminPanelProp
 
   return (
     <div className="min-h-screen bg-white text-black p-8">
+      {/* ... the rest of your JSX remains the same ... */}
       <div className="max-w-6xl mx-auto">
         <header className="flex justify-between items-center mb-12 border-b-4 border-black pb-8">
           <div>
             <h1 className="text-6xl font-bold lowercase tracking-tighter">Admin Dashboard</h1>
-            <p className="font-bold opacity-60 uppercase tracking-widest mt-2">{user.email}</p>
+            <p className="font-bold opacity-60 uppercase tracking-widest mt-2">{user?.email}</p>
           </div>
           <div className="flex gap-4">
             <button 
