@@ -15,7 +15,7 @@ export default function CategoryManager() {
     const fetchCategories = async () => {
       const { data, error } = await supabase
         .from('categories')
-        .select('id, name, bg_color as bgColor, text_color as textColor')
+        .select('id, name, bg_color, text_color')
         .order('name');
 
       if (error) {
@@ -23,7 +23,14 @@ export default function CategoryManager() {
         return;
       }
 
-      setCategories(data ?? []);
+      const mappedData = (data ?? []).map((cat: any) => ({
+        id: cat.id,
+        name: cat.name,
+        bgColor: cat.bg_color,
+        textColor: cat.text_color,
+      }));
+
+      setCategories(mappedData);
     };
 
     fetchCategories();
@@ -42,7 +49,7 @@ export default function CategoryManager() {
     const fetchSiteTheme = async () => {
       const { data, error } = await supabase
         .from('settings')
-        .select('bg_color as bgColor, text_color as textColor')
+        .select('bg_color, text_color')
         .eq('id', 'site_theme')
         .single();
 
@@ -54,7 +61,7 @@ export default function CategoryManager() {
       }
 
       if (data) {
-        setSiteTheme({ bgColor: data.bgColor, textColor: data.textColor });
+        setSiteTheme({ bgColor: data.bg_color, textColor: data.text_color });
       }
     };
 
@@ -71,7 +78,12 @@ export default function CategoryManager() {
   }, []);
 
   const handleUpdateSiteTheme = async (field: 'bgColor' | 'textColor', value: string) => {
-    const payload = field === 'bgColor' ? { id: 'site_theme', bg_color: value } : { id: 'site_theme', text_color: value };
+    const payload: any = { id: 'site_theme' };
+    if (field === 'bgColor') {
+      payload.bg_color = value;
+    } else {
+      payload.text_color = value;
+    }
 
     const { error } = await supabase.from('settings').upsert(payload, { onConflict: 'id' });
     if (error) {
